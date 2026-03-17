@@ -1,0 +1,1033 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pirate Treasure Hunt!</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { overflow: hidden; background: #000; font-family: 'Comic Sans MS', cursive; }
+canvas { display: block; }
+#ui {
+  position: absolute; top: 10px; left: 10px; color: white;
+  font-size: 24px; text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+  pointer-events: none; z-index: 10;
+}
+#message {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  color: #FFD700; font-size: 48px; text-shadow: 3px 3px 6px rgba(0,0,0,0.9);
+  pointer-events: none; z-index: 20; text-align: center; display: none;
+}
+#startScreen {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  background: linear-gradient(180deg, #1a0a2e 0%, #16213e 50%, #0a3d62 100%);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  z-index: 100; color: white; cursor: pointer;
+}
+#startScreen h1 { font-size: 64px; color: #FFD700; text-shadow: 3px 3px 8px #000; margin-bottom: 10px; }
+#startScreen .creators { font-size: 20px; color: #FFB347; margin-bottom: 30px; letter-spacing: 1px; }
+#startScreen p { font-size: 28px; color: #fff; animation: pulse 1.5s infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+#mobileControls {
+  position: absolute; bottom: 0; left: 0; width: 100%; z-index: 50;
+  display: none; pointer-events: none;
+}
+#mobileControls button {
+  pointer-events: auto; background: rgba(255,255,255,0.2); border: 2px solid rgba(255,255,255,0.4);
+  color: white; font-size: 32px; width: 64px; height: 64px; border-radius: 12px;
+  -webkit-user-select: none; user-select: none; touch-action: manipulation;
+}
+#mobileControls button:active { background: rgba(255,255,255,0.5); }
+#dpad { position: absolute; bottom: 20px; left: 20px; display: grid;
+  grid-template-columns: 64px 64px 64px; grid-template-rows: 64px 64px; gap: 4px; }
+#actionBtns { position: absolute; bottom: 20px; right: 20px; display: flex; gap: 10px; }
+#actionBtns button { width: 80px; height: 80px; font-size: 36px; border-radius: 50%; }
+@media (max-width: 900px) {
+  #startScreen h1 { font-size: 36px; }
+  #startScreen .creators { font-size: 16px; }
+  #startScreen p { font-size: 20px; }
+  #message { font-size: 28px !important; }
+  #ui { font-size: 16px; }
+  #mobileControls { display: block; }
+}
+</style>
+</head>
+<body>
+<div id="startScreen">
+  <h1>🏴‍☠️ Pirate Treasure Hunt!</h1>
+  <div class="creators">Made by Orly, Hazel, and Sidney</div>
+  <p>Click or Press Any Key to Start!</p>
+</div>
+<div id="mobileControls">
+  <div id="dpad">
+    <div></div>
+    <button id="btnUp">⬆</button>
+    <div></div>
+    <button id="btnLeft">⬅</button>
+    <button id="btnDown">⬇</button>
+    <button id="btnRight">➡</button>
+  </div>
+  <div id="actionBtns">
+    <button id="btnShoot">💥</button>
+  </div>
+</div>
+<div id="ui">
+  <div id="levelText"></div>
+  <div id="healthText"></div>
+  <div id="scoreText"></div>
+</div>
+<div id="message"></div>
+<canvas id="game"></canvas>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+window.addEventListener('resize', () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; });
+
+// Game state
+let state = 'start'; // start, sailing, island, camping, nightFight, win
+let level = 1;
+let score = 0;
+let health = 5;
+let maxHealth = 5;
+let screenShake = 0;
+let msgTimer = 0;
+let msgText = '';
+let oceanOffset = 0;
+let islandProgress = 0; // 0 to 100
+let treasureSpots = [];
+let treasureFound = false;
+let campProgress = 0;
+let nightTimer = 0;
+let gameTime = 0;
+let stars = [];
+let waves = [];
+
+// Generate stars for night
+for (let i = 0; i < 100; i++) stars.push({ x: Math.random() * 2000, y: Math.random() * 300, s: Math.random() * 2 + 1, b: Math.random() });
+
+// Player
+const player = { x: 150, y: 0, w: 80, h: 50, vy: 0, onGround: false, facing: 1, attackTimer: 0, invincible: 0, frame: 0 };
+
+// Projectiles & Enemies & Particles
+let bullets = [];
+let enemies = [];
+let particles = [];
+let obstacles = [];
+let campfire = null;
+let tent = null;
+
+const keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (state === 'start') startGame();
+  if (e.key === ' ' || e.key === 'ArrowUp') e.preventDefault();
+});
+window.addEventListener('keyup', e => keys[e.key] = false);
+canvas.addEventListener('click', e => {
+  if (state === 'start') { startGame(); return; }
+  shoot();
+});
+document.getElementById('startScreen').addEventListener('click', startGame);
+
+function startGame() {
+  if (state !== 'start') return;
+  document.getElementById('startScreen').style.display = 'none';
+  state = 'sailing';
+  level = 1;
+  score = 0;
+  health = 5;
+  resetLevel();
+}
+
+function resetLevel() {
+  enemies = [];
+  bullets = [];
+  particles = [];
+  obstacles = [];
+  treasureSpots = [];
+  treasureFound = false;
+  player.invincible = 0;
+  player.attackTimer = 0;
+
+  if (state === 'sailing') {
+    player.x = 150;
+    player.y = canvas.height * 0.55;
+    islandProgress = 0;
+    // Waves
+    waves = [];
+    for (let i = 0; i < 20; i++) waves.push({ x: i * 120, phase: Math.random() * Math.PI * 2 });
+  } else if (state === 'island') {
+    player.x = 100;
+    player.y = canvas.height - 150;
+    // Random treasure spots
+    for (let i = 0; i < 5; i++) {
+      treasureSpots.push({
+        x: 200 + Math.random() * (canvas.width - 400),
+        y: canvas.height - 120 + Math.random() * 30,
+        isReal: i === 0,
+        dug: false,
+        digProgress: 0
+      });
+    }
+    // Shuffle
+    treasureSpots.sort(() => Math.random() - 0.5);
+  } else if (state === 'camping') {
+    player.x = 100;
+    player.y = canvas.height - 150;
+    campProgress = 0;
+    campfire = null;
+    tent = { x: canvas.width - 200, y: canvas.height - 180 };
+  } else if (state === 'nightFight') {
+    player.x = canvas.width / 2;
+    player.y = canvas.height - 150;
+    nightTimer = 600; // 10 seconds at 60fps
+  }
+}
+
+function shoot() {
+  if (player.attackTimer > 0) return;
+  player.attackTimer = 15;
+  const bx = player.x + (player.facing > 0 ? player.w : 0);
+  const by = player.y + player.h / 2;
+  bullets.push({ x: bx, y: by, vx: player.facing * 12, vy: 0, life: 60,
+    type: state === 'sailing' ? 'cannonball' : 'sword' });
+  // Particles for cannon
+  for (let i = 0; i < 5; i++) {
+    particles.push({ x: bx, y: by, vx: player.facing * (Math.random() * 4 + 2), vy: (Math.random() - 0.5) * 4,
+      life: 15, color: state === 'sailing' ? '#888' : '#FFD700', size: 3 });
+  }
+}
+
+function spawnEnemy() {
+  if (state === 'sailing') {
+    const types = ['octopus', 'fish', 'shark'];
+    const type = types[Math.floor(Math.random() * types.length)];
+    const sz = type === 'shark' ? 70 : type === 'octopus' ? 60 : 40;
+    enemies.push({
+      type, x: canvas.width + 50, y: canvas.height * 0.5 + Math.random() * (canvas.height * 0.3),
+      w: sz, h: sz * 0.7, hp: type === 'shark' ? 3 : type === 'octopus' ? 2 : 1,
+      vx: -(Math.random() * 2 + 1.5), vy: 0, phase: Math.random() * Math.PI * 2, frame: 0
+    });
+  } else if (state === 'camping') {
+    const types = ['bear', 'wolf', 'duck'];
+    const type = types[Math.floor(Math.random() * types.length)];
+    const sz = type === 'duck' ? 80 : type === 'bear' ? 65 : 50;
+    const fromRight = Math.random() > 0.5;
+    enemies.push({
+      type, x: fromRight ? canvas.width + 50 : -50,
+      y: canvas.height - 120 - Math.random() * 30,
+      w: sz, h: sz * 0.8, hp: type === 'duck' ? 5 : type === 'bear' ? 3 : 1,
+      vx: fromRight ? -(Math.random() + 1) : (Math.random() + 1), vy: 0, phase: Math.random() * Math.PI * 2, frame: 0
+    });
+  } else if (state === 'nightFight') {
+    const types = ['bear', 'wolf', 'duck', 'flyingfish'];
+    const type = types[Math.floor(Math.random() * types.length)];
+    const sz = type === 'duck' ? 90 : type === 'flyingfish' ? 55 : type === 'bear' ? 65 : 50;
+    const fromRight = Math.random() > 0.5;
+    const e = {
+      type, x: fromRight ? canvas.width + 50 : -50,
+      y: type === 'flyingfish' ? 100 + Math.random() * 200 : canvas.height - 120 - Math.random() * 30,
+      w: sz, h: sz * 0.8, hp: type === 'duck' ? 6 : type === 'flyingfish' ? 2 : type === 'bear' ? 3 : 1,
+      vx: fromRight ? -(Math.random() * 1.5 + 1) : (Math.random() * 1.5 + 1), vy: 0,
+      phase: Math.random() * Math.PI * 2, frame: 0
+    };
+    if (type === 'flyingfish') e.vy = Math.sin(e.phase) * 2;
+    enemies.push(e);
+  }
+}
+
+function showMessage(text, duration) {
+  msgText = text;
+  msgTimer = duration || 120;
+  document.getElementById('message').textContent = text;
+  document.getElementById('message').style.display = 'block';
+}
+
+function hideMessage() {
+  document.getElementById('message').style.display = 'none';
+}
+
+function damagePlayer() {
+  if (player.invincible > 0) return;
+  health--;
+  player.invincible = 60;
+  screenShake = 10;
+  if (health <= 0) {
+    state = 'start';
+    document.getElementById('startScreen').style.display = 'flex';
+    document.getElementById('startScreen').querySelector('h1').textContent = '💀 Game Over!';
+    document.getElementById('startScreen').querySelector('p').textContent = `Score: ${score} - Click to Try Again!`;
+  }
+}
+
+function update() {
+  gameTime++;
+  if (state === 'start') return;
+
+  // Player input
+  const speed = 5;
+  if (keys['ArrowLeft'] || keys['a']) { player.x -= speed; player.facing = -1; }
+  if (keys['ArrowRight'] || keys['d']) { player.x += speed; player.facing = 1; }
+
+  if (state !== 'sailing') {
+    // Gravity
+    player.vy += 0.5;
+    player.y += player.vy;
+    const ground = canvas.height - 100;
+    if (player.y + player.h >= ground) { player.y = ground - player.h; player.vy = 0; player.onGround = true; }
+    if ((keys['ArrowUp'] || keys['w'] || keys[' ']) && player.onGround) { player.vy = -12; player.onGround = false; }
+  } else {
+    // Sailing: bob up and down
+    if (keys['ArrowUp'] || keys['w']) player.y -= 3;
+    if (keys['ArrowDown'] || keys['s']) player.y += 3;
+    player.y = Math.max(canvas.height * 0.3, Math.min(canvas.height * 0.75, player.y));
+  }
+
+  // Shoot with spacebar
+  if (keys[' '] || keys['f']) shoot();
+
+  // Clamp player
+  player.x = Math.max(0, Math.min(canvas.width - player.w, player.x));
+  if (player.attackTimer > 0) player.attackTimer--;
+  if (player.invincible > 0) player.invincible--;
+  if (screenShake > 0) screenShake--;
+  player.frame += 0.1;
+
+  // Bullets
+  bullets.forEach(b => { b.x += b.vx; b.y += b.vy; b.life--; });
+  bullets = bullets.filter(b => b.life > 0 && b.x > -50 && b.x < canvas.width + 50);
+
+  // Particles
+  particles.forEach(p => { p.x += p.vx; p.y += p.vy; p.life--; p.vy += 0.1; });
+  particles = particles.filter(p => p.life > 0);
+
+  // Enemy spawn
+  if (state === 'sailing' && Math.random() < 0.02) spawnEnemy();
+  if (state === 'camping' && Math.random() < 0.015) spawnEnemy();
+  if (state === 'nightFight' && Math.random() < 0.03) spawnEnemy();
+
+  // Enemies
+  enemies.forEach(e => {
+    e.x += e.vx;
+    e.phase += 0.05;
+    e.frame += 0.1;
+    if (e.type === 'flyingfish') {
+      e.y += Math.sin(e.phase) * 2;
+    } else if (state === 'sailing') {
+      e.y += Math.sin(e.phase) * 1;
+    }
+
+    // Bullet collision
+    bullets.forEach(b => {
+      if (b.life > 0 && Math.abs(b.x - e.x) < e.w/2 + 10 && Math.abs(b.y - e.y) < e.h/2 + 10) {
+        e.hp--;
+        b.life = 0;
+        screenShake = 3;
+        for (let i = 0; i < 8; i++) {
+          particles.push({ x: e.x, y: e.y, vx: (Math.random()-0.5)*6, vy: (Math.random()-0.5)*6,
+            life: 20, color: '#FF6600', size: 4 });
+        }
+        if (e.hp <= 0) {
+          score += e.type === 'shark' ? 30 : e.type === 'duck' ? 50 : e.type === 'bear' ? 20 : 10;
+          showMessage(e.type === 'duck' ? '🦆 GIANT DUCK DOWN!' : '💥 ' + score, 40);
+          for (let i = 0; i < 15; i++) {
+            particles.push({ x: e.x, y: e.y, vx: (Math.random()-0.5)*10, vy: (Math.random()-0.5)*10,
+              life: 30, color: ['#FFD700','#FF6600','#FF0000'][Math.floor(Math.random()*3)], size: 5 });
+          }
+        }
+      }
+    });
+
+    // Player collision
+    if (e.hp > 0 && Math.abs(player.x + player.w/2 - e.x) < (player.w + e.w)/2 - 10 &&
+        Math.abs(player.y + player.h/2 - e.y) < (player.h + e.h)/2 - 10) {
+      damagePlayer();
+    }
+  });
+  enemies = enemies.filter(e => e.hp > 0 && e.x > -100 && e.x < canvas.width + 100);
+
+  // State-specific logic
+  if (state === 'sailing') {
+    oceanOffset += 2;
+    islandProgress += 0.05;
+    if (islandProgress >= 100) {
+      state = 'island';
+      showMessage('🏝️ ISLAND FOUND! Dig for treasure!', 120);
+      resetLevel();
+    }
+  } else if (state === 'island') {
+    // Check dig spots
+    treasureSpots.forEach(t => {
+      if (!t.dug && Math.abs(player.x + player.w/2 - t.x) < 40 && Math.abs(player.y + player.h - t.y) < 40) {
+        if (keys['ArrowDown'] || keys['s']) {
+          t.digProgress += 1;
+          // Dig particles
+          if (gameTime % 3 === 0) particles.push({ x: t.x + (Math.random()-0.5)*20, y: t.y,
+            vx: (Math.random()-0.5)*3, vy: -Math.random()*4, life: 20, color: '#C4A35A', size: 4 });
+          if (t.digProgress >= 60) {
+            t.dug = true;
+            if (t.isReal) {
+              treasureFound = true;
+              score += 100;
+              showMessage('💰 TREASURE FOUND! +100', 120);
+              for (let i = 0; i < 30; i++) {
+                particles.push({ x: t.x, y: t.y, vx: (Math.random()-0.5)*12, vy: -Math.random()*10,
+                  life: 50, color: '#FFD700', size: 6 });
+              }
+              setTimeout(() => {
+                state = 'camping';
+                showMessage('🏕️ Level 2: Camp Adventure!', 120);
+                health = Math.min(health + 2, maxHealth);
+                resetLevel();
+              }, 2000);
+            } else {
+              showMessage('❌ Nothing here... keep digging!', 60);
+            }
+          }
+        }
+      }
+    });
+  } else if (state === 'camping') {
+    campProgress += 0.03;
+    // Reach tent
+    if (tent && Math.abs(player.x - tent.x) < 60 && Math.abs(player.y - tent.y + 30) < 60) {
+      state = 'nightFight';
+      showMessage('🌙 NIGHT FALLS! Survive until dawn!', 120);
+      resetLevel();
+    }
+  } else if (state === 'nightFight') {
+    nightTimer--;
+    if (nightTimer <= 0) {
+      state = 'win';
+      showMessage('🌅 YOU SURVIVED! VICTORY!', 300);
+      score += 200;
+    }
+  }
+
+  // Update UI
+  document.getElementById('levelText').textContent =
+    state === 'sailing' ? `🏴‍☠️ Level 1: Sail to the Island (${Math.floor(islandProgress)}%)` :
+    state === 'island' ? '🏝️ Find the Treasure! (press ⬇ to dig on X marks)' :
+    state === 'camping' ? '🏕️ Level 2: Reach the Tent!' :
+    state === 'nightFight' ? `🌙 Survive the Night! (${Math.ceil(nightTimer/60)}s)` :
+    state === 'win' ? '🌅 VICTORY!' : '';
+  document.getElementById('healthText').textContent = '❤️'.repeat(health) + '🖤'.repeat(maxHealth - health);
+  document.getElementById('scoreText').textContent = `Score: ${score}`;
+}
+
+function draw() {
+  const shakeX = screenShake > 0 ? (Math.random()-0.5) * screenShake : 0;
+  const shakeY = screenShake > 0 ? (Math.random()-0.5) * screenShake : 0;
+  ctx.save();
+  ctx.translate(shakeX, shakeY);
+
+  if (state === 'sailing' || state === 'island') {
+    // Sky
+    const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    grad.addColorStop(0, '#87CEEB');
+    grad.addColorStop(0.5, '#4DB8FF');
+    grad.addColorStop(1, '#006994');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Sun
+    ctx.fillStyle = '#FFD700';
+    ctx.beginPath();
+    ctx.arc(canvas.width - 120, 80, 50, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Clouds
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    for (let i = 0; i < 5; i++) {
+      const cx = ((i * 300 + gameTime * 0.3) % (canvas.width + 200)) - 100;
+      ctx.beginPath();
+      ctx.arc(cx, 60 + i * 20, 30, 0, Math.PI * 2);
+      ctx.arc(cx + 30, 55 + i * 20, 35, 0, Math.PI * 2);
+      ctx.arc(cx + 60, 60 + i * 20, 30, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    if (state === 'sailing') {
+      // Ocean waves
+      ctx.fillStyle = '#0066AA';
+      ctx.fillRect(0, canvas.height * 0.6, canvas.width, canvas.height * 0.4);
+
+      // Wave tops
+      for (let i = 0; i < canvas.width; i += 4) {
+        const waveY = canvas.height * 0.6 + Math.sin((i + oceanOffset) * 0.02) * 15 + Math.sin((i + oceanOffset * 1.5) * 0.01) * 10;
+        ctx.fillStyle = `rgba(100,200,255,${0.3 + Math.sin((i + oceanOffset) * 0.03) * 0.2})`;
+        ctx.fillRect(i, waveY, 4, 3);
+      }
+
+      // Island in distance (as you get closer)
+      if (islandProgress > 50) {
+        const islandSize = (islandProgress - 50) * 4;
+        ctx.fillStyle = '#2D5016';
+        ctx.beginPath();
+        ctx.arc(canvas.width - 150, canvas.height * 0.55, islandSize, Math.PI, 0);
+        ctx.fill();
+        ctx.fillStyle = '#C4A35A';
+        ctx.fillRect(canvas.width - 150 - islandSize, canvas.height * 0.55, islandSize * 2, 10);
+        // Palm tree
+        if (islandSize > 30) {
+          ctx.fillStyle = '#8B4513';
+          ctx.fillRect(canvas.width - 140, canvas.height * 0.55 - islandSize * 0.8, 8, islandSize * 0.6);
+          ctx.fillStyle = '#228B22';
+          ctx.beginPath();
+          ctx.arc(canvas.width - 136, canvas.height * 0.55 - islandSize * 0.8, 25, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // Draw pirate ship (player)
+      drawPirateShip(player.x, player.y + Math.sin(gameTime * 0.05) * 5);
+    } else if (state === 'island') {
+      // Sandy beach
+      ctx.fillStyle = '#C4A35A';
+      ctx.fillRect(0, canvas.height - 100, canvas.width, 100);
+      ctx.fillStyle = '#2D5016';
+      // Palm trees
+      for (let i = 0; i < 4; i++) {
+        const tx = 100 + i * (canvas.width / 4);
+        ctx.fillStyle = '#8B4513';
+        ctx.fillRect(tx, canvas.height - 200, 12, 100);
+        ctx.fillStyle = '#228B22';
+        ctx.beginPath();
+        ctx.arc(tx + 6, canvas.height - 210, 35, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Treasure spots (X marks)
+      treasureSpots.forEach(t => {
+        if (!t.dug) {
+          ctx.save();
+          ctx.translate(t.x, t.y);
+          ctx.strokeStyle = '#8B0000';
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.moveTo(-15, -15); ctx.lineTo(15, 15);
+          ctx.moveTo(15, -15); ctx.lineTo(-15, 15);
+          ctx.stroke();
+          // Dig progress bar
+          if (t.digProgress > 0) {
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.fillRect(-20, -30, 40, 8);
+            ctx.fillStyle = '#FFD700';
+            ctx.fillRect(-20, -30, 40 * (t.digProgress / 60), 8);
+          }
+          ctx.restore();
+        } else if (t.isReal) {
+          // Treasure chest!
+          ctx.fillStyle = '#8B4513';
+          ctx.fillRect(t.x - 20, t.y - 20, 40, 30);
+          ctx.fillStyle = '#FFD700';
+          ctx.fillRect(t.x - 15, t.y - 15, 30, 20);
+        }
+      });
+      // Player on island
+      drawPlayer(player.x, player.y);
+    }
+  } else if (state === 'camping' || state === 'nightFight') {
+    // Dark forest background
+    const isNight = state === 'nightFight';
+    const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    if (isNight) {
+      grad.addColorStop(0, '#0a0a2e');
+      grad.addColorStop(1, '#1a1a3e');
+    } else {
+      grad.addColorStop(0, '#FF7F50');
+      grad.addColorStop(0.4, '#FFB347');
+      grad.addColorStop(1, '#2D5016');
+    }
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Stars at night
+    if (isNight) {
+      ctx.fillStyle = '#FFF';
+      stars.forEach(s => {
+        const twinkle = 0.5 + Math.sin(gameTime * 0.03 + s.b * 10) * 0.5;
+        ctx.globalAlpha = twinkle;
+        ctx.fillRect(s.x % canvas.width, s.y, s.s, s.s);
+      });
+      ctx.globalAlpha = 1;
+      // Moon
+      ctx.fillStyle = '#FFFFCC';
+      ctx.beginPath();
+      ctx.arc(canvas.width - 100, 80, 40, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Ground
+    ctx.fillStyle = '#2D5016';
+    ctx.fillRect(0, canvas.height - 100, canvas.width, 100);
+    ctx.fillStyle = '#3A6B1E';
+    for (let i = 0; i < canvas.width; i += 30) {
+      ctx.beginPath();
+      ctx.moveTo(i, canvas.height - 100);
+      ctx.lineTo(i + 15, canvas.height - 115);
+      ctx.lineTo(i + 30, canvas.height - 100);
+      ctx.fill();
+    }
+
+    // Trees
+    for (let i = 0; i < 6; i++) {
+      const tx = 80 + i * (canvas.width / 6);
+      ctx.fillStyle = '#4A2800';
+      ctx.fillRect(tx, canvas.height - 220, 15, 120);
+      ctx.fillStyle = isNight ? '#1A4A0A' : '#228B22';
+      ctx.beginPath();
+      ctx.moveTo(tx - 30, canvas.height - 200);
+      ctx.lineTo(tx + 7, canvas.height - 300);
+      ctx.lineTo(tx + 45, canvas.height - 200);
+      ctx.fill();
+    }
+
+    // Tent
+    if (state === 'camping' && tent) {
+      ctx.fillStyle = '#CC4400';
+      ctx.beginPath();
+      ctx.moveTo(tent.x - 40, tent.y + 60);
+      ctx.lineTo(tent.x + 20, tent.y - 20);
+      ctx.lineTo(tent.x + 80, tent.y + 60);
+      ctx.fill();
+      ctx.fillStyle = '#8B3000';
+      ctx.beginPath();
+      ctx.moveTo(tent.x + 80, tent.y + 60);
+      ctx.lineTo(tent.x + 20, tent.y - 20);
+      ctx.lineTo(tent.x + 50, tent.y + 60);
+      ctx.fill();
+      // Arrow pointing to tent
+      const arrowY = tent.y - 50 + Math.sin(gameTime * 0.08) * 10;
+      ctx.fillStyle = '#FFD700';
+      ctx.font = '24px Arial';
+      ctx.fillText('⬇', tent.x + 10, arrowY);
+    }
+
+    // Night tent + campfire
+    if (isNight) {
+      // Tent in background
+      ctx.fillStyle = '#883300';
+      const tx2 = canvas.width / 2;
+      ctx.beginPath();
+      ctx.moveTo(tx2 - 50, canvas.height - 100);
+      ctx.lineTo(tx2, canvas.height - 180);
+      ctx.lineTo(tx2 + 50, canvas.height - 100);
+      ctx.fill();
+
+      // Campfire glow
+      const glowR = 80 + Math.sin(gameTime * 0.1) * 10;
+      const fireGrad = ctx.createRadialGradient(tx2, canvas.height - 100, 5, tx2, canvas.height - 100, glowR);
+      fireGrad.addColorStop(0, 'rgba(255,150,0,0.4)');
+      fireGrad.addColorStop(1, 'rgba(255,100,0,0)');
+      ctx.fillStyle = fireGrad;
+      ctx.fillRect(tx2 - glowR, canvas.height - 100 - glowR, glowR * 2, glowR * 2);
+
+      // Fire
+      ctx.fillStyle = '#FF6600';
+      ctx.beginPath();
+      ctx.moveTo(tx2 - 10, canvas.height - 100);
+      ctx.quadraticCurveTo(tx2 - 5, canvas.height - 130 - Math.sin(gameTime*0.2)*10, tx2, canvas.height - 140);
+      ctx.quadraticCurveTo(tx2 + 5, canvas.height - 130 - Math.cos(gameTime*0.15)*10, tx2 + 10, canvas.height - 100);
+      ctx.fill();
+      ctx.fillStyle = '#FFAA00';
+      ctx.beginPath();
+      ctx.moveTo(tx2 - 5, canvas.height - 100);
+      ctx.quadraticCurveTo(tx2, canvas.height - 125, tx2 + 5, canvas.height - 100);
+      ctx.fill();
+
+      // Night timer bar
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(canvas.width/2 - 150, 50, 300, 20);
+      ctx.fillStyle = nightTimer > 200 ? '#4488FF' : '#FF4444';
+      ctx.fillRect(canvas.width/2 - 150, 50, 300 * (nightTimer / 600), 20);
+      ctx.fillStyle = '#FFF';
+      ctx.font = '14px Comic Sans MS';
+      ctx.textAlign = 'center';
+      ctx.fillText('Until Dawn', canvas.width/2, 65);
+      ctx.textAlign = 'left';
+    }
+
+    drawPlayer(player.x, player.y);
+  } else if (state === 'win') {
+    // Victory screen
+    const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    grad.addColorStop(0, '#FFD700');
+    grad.addColorStop(1, '#FF8C00');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#FFF';
+    ctx.font = '60px Comic Sans MS';
+    ctx.textAlign = 'center';
+    ctx.fillText('🏆 YOU WIN! 🏆', canvas.width/2, canvas.height/2 - 40);
+    ctx.font = '36px Comic Sans MS';
+    ctx.fillText(`Final Score: ${score}`, canvas.width/2, canvas.height/2 + 30);
+    ctx.font = '24px Comic Sans MS';
+    ctx.fillText('Refresh to play again!', canvas.width/2, canvas.height/2 + 80);
+    ctx.textAlign = 'left';
+  }
+
+  // Enemies
+  enemies.forEach(e => drawEnemy(e));
+
+  // Bullets
+  bullets.forEach(b => {
+    if (b.type === 'cannonball') {
+      ctx.fillStyle = '#333';
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, 6, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.strokeStyle = '#FFD700';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(b.x, b.y - 8);
+      ctx.lineTo(b.x + b.vx * 2, b.y + 8);
+      ctx.stroke();
+    }
+  });
+
+  // Particles
+  particles.forEach(p => {
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = p.life / 30;
+    ctx.fillRect(p.x - p.size/2, p.y - p.size/2, p.size, p.size);
+  });
+  ctx.globalAlpha = 1;
+
+  ctx.restore();
+}
+
+function drawPirateShip(x, y) {
+  ctx.save();
+  ctx.translate(x, y);
+  // Hull
+  ctx.fillStyle = '#8B4513';
+  ctx.beginPath();
+  ctx.moveTo(0, 20);
+  ctx.lineTo(10, 40);
+  ctx.lineTo(70, 40);
+  ctx.lineTo(80, 20);
+  ctx.lineTo(75, 10);
+  ctx.lineTo(5, 10);
+  ctx.closePath();
+  ctx.fill();
+  // Mast
+  ctx.fillStyle = '#654321';
+  ctx.fillRect(35, -40, 5, 55);
+  // Sail
+  ctx.fillStyle = '#FFF';
+  ctx.beginPath();
+  ctx.moveTo(40, -35);
+  ctx.lineTo(70, -15);
+  ctx.lineTo(40, 5);
+  ctx.fill();
+  // Skull on sail
+  ctx.fillStyle = '#000';
+  ctx.font = '18px Arial';
+  ctx.fillText('☠', 43, -8);
+  // Cannon
+  ctx.fillStyle = '#444';
+  ctx.fillRect(player.facing > 0 ? 65 : 0, 15, 15, 8);
+  // Flag
+  ctx.fillStyle = '#000';
+  ctx.fillRect(37, -45, 25, 12);
+  ctx.fillStyle = '#FFF';
+  ctx.font = '8px Arial';
+  ctx.fillText('☠', 42, -36);
+  ctx.restore();
+
+  // Invincibility flash
+  if (player.invincible > 0 && Math.floor(player.invincible / 4) % 2 === 0) {
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.fillRect(x, y - 40, 80, 80);
+  }
+}
+
+function drawPlayer(x, y) {
+  if (player.invincible > 0 && Math.floor(player.invincible / 4) % 2 === 0) {
+    ctx.globalAlpha = 0.5;
+  }
+  ctx.save();
+  ctx.translate(x + player.w/2, y + player.h/2);
+  if (player.facing < 0) ctx.scale(-1, 1);
+
+  // Body
+  ctx.fillStyle = '#E8B87C';
+  ctx.fillRect(-12, -20, 24, 25); // torso
+  // Head
+  ctx.fillStyle = '#E8B87C';
+  ctx.beginPath();
+  ctx.arc(0, -28, 14, 0, Math.PI * 2);
+  ctx.fill();
+  // Pirate hat
+  ctx.fillStyle = '#333';
+  ctx.beginPath();
+  ctx.moveTo(-18, -32);
+  ctx.lineTo(0, -48);
+  ctx.lineTo(18, -32);
+  ctx.lineTo(12, -28);
+  ctx.lineTo(-12, -28);
+  ctx.fill();
+  // Eyes
+  ctx.fillStyle = '#000';
+  ctx.fillRect(-6, -30, 4, 4);
+  ctx.fillRect(3, -30, 4, 4);
+  // Legs
+  ctx.fillStyle = '#336';
+  ctx.fillRect(-10, 5, 8, 18);
+  ctx.fillRect(3, 5, 8, 18);
+  // Sword/weapon
+  if (player.attackTimer > 8) {
+    ctx.fillStyle = '#CCC';
+    ctx.fillRect(14, -15, 25, 4);
+    ctx.fillStyle = '#FFD700';
+    ctx.fillRect(12, -18, 4, 10);
+  } else {
+    ctx.fillStyle = '#CCC';
+    ctx.fillRect(14, -5, 4, 20);
+    ctx.fillStyle = '#FFD700';
+    ctx.fillRect(12, -8, 8, 5);
+  }
+
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+function drawEnemy(e) {
+  ctx.save();
+  ctx.translate(e.x, e.y);
+
+  if (e.type === 'octopus') {
+    // Purple octopus
+    ctx.fillStyle = '#8B008B';
+    ctx.beginPath();
+    ctx.arc(0, -5, 22, Math.PI, 0);
+    ctx.fill();
+    // Tentacles
+    for (let i = 0; i < 6; i++) {
+      const tx = -18 + i * 7;
+      ctx.beginPath();
+      ctx.moveTo(tx, 5);
+      ctx.quadraticCurveTo(tx + Math.sin(e.phase + i) * 8, 25, tx + Math.sin(e.phase + i + 1) * 5, 35);
+      ctx.strokeStyle = '#8B008B';
+      ctx.lineWidth = 4;
+      ctx.stroke();
+    }
+    // Eyes
+    ctx.fillStyle = '#FFF';
+    ctx.beginPath(); ctx.arc(-8, -8, 6, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(8, -8, 6, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.arc(-6, -7, 3, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(10, -7, 3, 0, Math.PI*2); ctx.fill();
+    // Angry eyebrows
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(-14, -16); ctx.lineTo(-4, -13); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(14, -16); ctx.lineTo(4, -13); ctx.stroke();
+  } else if (e.type === 'fish') {
+    ctx.fillStyle = '#FF6347';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 18, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Tail
+    ctx.beginPath();
+    ctx.moveTo(-18, 0);
+    ctx.lineTo(-30, -10);
+    ctx.lineTo(-30, 10);
+    ctx.fill();
+    // Eye
+    ctx.fillStyle = '#FFF';
+    ctx.beginPath(); ctx.arc(8, -2, 4, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.arc(9, -2, 2, 0, Math.PI*2); ctx.fill();
+  } else if (e.type === 'shark') {
+    ctx.fillStyle = '#666';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 35, 15, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Fin
+    ctx.beginPath();
+    ctx.moveTo(0, -15);
+    ctx.lineTo(-10, -35);
+    ctx.lineTo(10, -15);
+    ctx.fill();
+    // Tail
+    ctx.beginPath();
+    ctx.moveTo(-35, 0);
+    ctx.lineTo(-50, -15);
+    ctx.lineTo(-45, 10);
+    ctx.fill();
+    // Eye
+    ctx.fillStyle = '#FFF';
+    ctx.beginPath(); ctx.arc(20, -5, 5, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.arc(21, -5, 3, 0, Math.PI*2); ctx.fill();
+    // Teeth
+    ctx.fillStyle = '#FFF';
+    for (let i = 0; i < 5; i++) {
+      ctx.beginPath();
+      ctx.moveTo(28 + i * 3, 5);
+      ctx.lineTo(29.5 + i * 3, 12);
+      ctx.lineTo(31 + i * 3, 5);
+      ctx.fill();
+    }
+  } else if (e.type === 'bear') {
+    // Brown bear
+    ctx.fillStyle = '#8B4513';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 28, 22, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Head
+    ctx.beginPath();
+    ctx.arc(22, -10, 16, 0, Math.PI * 2);
+    ctx.fill();
+    // Ears
+    ctx.beginPath(); ctx.arc(14, -24, 7, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(30, -24, 7, 0, Math.PI*2); ctx.fill();
+    // Snout
+    ctx.fillStyle = '#A0522D';
+    ctx.beginPath(); ctx.arc(32, -6, 8, 0, Math.PI*2); ctx.fill();
+    // Eyes
+    ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.arc(18, -12, 3, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(28, -12, 3, 0, Math.PI*2); ctx.fill();
+    // Legs
+    ctx.fillStyle = '#8B4513';
+    ctx.fillRect(-20, 15, 10, 12);
+    ctx.fillRect(-5, 15, 10, 12);
+    ctx.fillRect(8, 15, 10, 12);
+    ctx.fillRect(20, 15, 10, 12);
+  } else if (e.type === 'wolf') {
+    ctx.fillStyle = '#808080';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 22, 14, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Head
+    ctx.beginPath(); ctx.arc(18, -5, 12, 0, Math.PI*2); ctx.fill();
+    // Ears (pointy)
+    ctx.beginPath(); ctx.moveTo(12, -15); ctx.lineTo(10, -28); ctx.lineTo(18, -15); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(22, -15); ctx.lineTo(24, -28); ctx.lineTo(28, -15); ctx.fill();
+    // Snout
+    ctx.beginPath(); ctx.moveTo(28, -5); ctx.lineTo(38, -2); ctx.lineTo(28, 2); ctx.fill();
+    // Eye
+    ctx.fillStyle = '#FF0';
+    ctx.beginPath(); ctx.arc(22, -8, 3, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.arc(22, -8, 1.5, 0, Math.PI*2); ctx.fill();
+    // Tail
+    ctx.strokeStyle = '#808080';
+    ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.moveTo(-22, -5); ctx.quadraticCurveTo(-35, -20, -30, -25); ctx.stroke();
+  } else if (e.type === 'duck') {
+    // GIANT RUBBER DUCK
+    const bob = Math.sin(e.phase) * 3;
+    ctx.fillStyle = '#FFD700';
+    // Body
+    ctx.beginPath();
+    ctx.ellipse(0, bob, 35, 28, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Head
+    ctx.beginPath();
+    ctx.arc(20, -25 + bob, 20, 0, Math.PI * 2);
+    ctx.fill();
+    // Beak
+    ctx.fillStyle = '#FF8C00';
+    ctx.beginPath();
+    ctx.moveTo(35, -25 + bob);
+    ctx.lineTo(50, -22 + bob);
+    ctx.lineTo(35, -18 + bob);
+    ctx.fill();
+    // Eye
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.arc(28, -30 + bob, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#FFF';
+    ctx.beginPath();
+    ctx.arc(29, -31 + bob, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+    // Crown (because it's a boss)
+    ctx.fillStyle = '#FF0000';
+    ctx.beginPath();
+    ctx.moveTo(8, -42 + bob);
+    ctx.lineTo(12, -52 + bob);
+    ctx.lineTo(17, -44 + bob);
+    ctx.lineTo(22, -55 + bob);
+    ctx.lineTo(27, -42 + bob);
+    ctx.fill();
+    // HP bar
+    const maxHp = state === 'nightFight' ? 6 : 5;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(-25, -65 + bob, 50, 6);
+    ctx.fillStyle = '#FF0000';
+    ctx.fillRect(-25, -65 + bob, 50 * (e.hp / maxHp), 6);
+  } else if (e.type === 'flyingfish') {
+    // HUGE FLYING FISH
+    ctx.fillStyle = '#00CED1';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 25, 12, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Wings
+    ctx.fillStyle = 'rgba(0,206,209,0.6)';
+    ctx.beginPath();
+    ctx.moveTo(-5, -10);
+    ctx.lineTo(-20, -30);
+    ctx.lineTo(10, -10);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(-5, 10);
+    ctx.lineTo(-20, 30);
+    ctx.lineTo(10, 10);
+    ctx.fill();
+    // Tail
+    ctx.fillStyle = '#00CED1';
+    ctx.beginPath();
+    ctx.moveTo(-25, 0);
+    ctx.lineTo(-40, -12);
+    ctx.lineTo(-40, 12);
+    ctx.fill();
+    // Eye
+    ctx.fillStyle = '#FFF';
+    ctx.beginPath(); ctx.arc(15, -3, 5, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.arc(16, -3, 2.5, 0, Math.PI*2); ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+// Mobile touch controls
+function setupMobileBtn(id, key) {
+  const btn = document.getElementById(id);
+  if (!btn) return;
+  btn.addEventListener('touchstart', e => { e.preventDefault(); keys[key] = true; if (state === 'start') startGame(); });
+  btn.addEventListener('touchend', e => { e.preventDefault(); keys[key] = false; });
+  btn.addEventListener('mousedown', e => { keys[key] = true; });
+  btn.addEventListener('mouseup', e => { keys[key] = false; });
+}
+setupMobileBtn('btnUp', 'ArrowUp');
+setupMobileBtn('btnDown', 'ArrowDown');
+setupMobileBtn('btnLeft', 'ArrowLeft');
+setupMobileBtn('btnRight', 'ArrowRight');
+const shootBtn = document.getElementById('btnShoot');
+if (shootBtn) {
+  shootBtn.addEventListener('touchstart', e => { e.preventDefault(); shoot(); });
+  shootBtn.addEventListener('mousedown', e => { shoot(); });
+}
+// Prevent scrolling/zooming on mobile
+document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+
+gameLoop();
+</script>
+</body>
+</html>
